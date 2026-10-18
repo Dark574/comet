@@ -51,8 +51,20 @@ struct Args {
     refresh_token: Option<String>,
     #[arg(long, help = "Galaxy user id from /userData.json")]
     user_id: Option<String>,
-    #[arg(long, help = "User name")]
-    username: String,
+    #[arg(
+        long,
+        help = "User name",
+        required_unless_present = "credentials_stdin"
+    )]
+    username: Option<String>,
+    #[arg(
+        long = "credentials-stdin",
+        help = "Read access token, refresh token, Galaxy user id and user name as JSON from stdin",
+        global = true,
+        group = "import",
+        conflicts_with_all = ["access_token", "refresh_token", "user_id", "username"]
+    )]
+    credentials_stdin: bool,
     #[arg(
         long = "from-heroic",
         help = "Load tokens from heroic",
@@ -106,8 +118,17 @@ async fn main() {
     log::debug!("Configuration file {:?}", *comet::CONFIG);
     log::info!("Preferred language: {}", comet::LOCALE.as_str());
 
-    let (access_token, refresh_token, galaxy_user_id) =
-        import_parsers::handle_credentials_import(&args);
+    let credentials = import_parsers::handle_credentials_import(&args).unwrap_or_else(|error| {
+        eprintln!("Failed to load credentials: {error}");
+        std::process::exit(2);
+    });
+    let access_token = credentials.access_token;
+    let refresh_token = credentials.refresh_token;
+    let galaxy_user_id = credentials.galaxy_user_id;
+    let username = credentials
+        .username
+        .or(args.username)
+        .expect("clap requires --username unless --credentials-stdin is used");
 
     let certificate = reqwest::tls::Certificate::from_pem(comet::CERT).unwrap();
     let reqwest_client = Client::builder()
@@ -117,7 +138,7 @@ async fn main() {
         .expect("Failed to build reqwest client");
 
     let user_info = Arc::new(UserInfo {
-        username: args.username,
+        username,
         galaxy_user_id: galaxy_user_id.clone(),
     });
 
@@ -400,4 +421,38 @@ async fn main() {
     // Ignore errors, we are exiting
     let _ = pusher_handle.await;
     join_all(handlers).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credentials_stdin_does_not_require_username_argument() {
+        let args = Args::try_parse_from(["comet", "--credentials-stdin"]);
+
+        assert!(args.is_ok());
+    }
+
+    #[test]
+    fn credentials_stdin_conflicts_with_direct_credentials() {
+        let args =
+            Args::try_parse_from(["comet", "--credentials-stdin", "--access-token", "access"]);
+
+        assert!(args.is_err());
+    }
+
+    #[test]
+    fn credentials_stdin_conflicts_with_file_import() {
+        let args = Args::try_parse_from(["comet", "--credentials-stdin", "--from-heroic"]);
+
+        assert!(args.is_err());
+    }
+
+    #[test]
+    fn other_credential_sources_still_require_username_argument() {
+        let args = Args::try_parse_from(["comet", "--from-heroic"]);
+
+        assert!(args.is_err());
+    }
 }

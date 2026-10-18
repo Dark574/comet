@@ -105,8 +105,24 @@ https://login.gog.com/auth?client_id=46899977096215655&layout=galaxy&redirect_ur
 
 ### Running
 
+Launchers can pass credentials without exposing them in process arguments or writing them to a
+configuration file by starting Comet with `--credentials-stdin`. Comet reads one JSON object from
+standard input, limited to 16 KiB, before starting its services:
+
+```json
+{
+  "access_token": "<access_token>",
+  "refresh_token": "<refresh_token>",
+  "user_id": "<user_id>",
+  "username": "<username>"
+}
 ```
-comet --token "<access_token>" --refresh_token "<refresh_token>" --user-id <user_id> --username <USERNAME>
+
+The launcher must close Comet's standard input after writing the object. Credential input from
+standard input cannot be combined with another credential source.
+
+```
+comet --access-token "<access_token>" --refresh-token "<refresh_token>" --user-id <user_id> --username <USERNAME>
 ```
 
 Or if you are using Heroic/gogdl
