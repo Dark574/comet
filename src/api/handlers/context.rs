@@ -156,6 +156,13 @@ impl HandlerContext {
             .execute(&mut *connection)
             .await;
 
+        drop(connection);
+        let pending_changes = db::gameplay::get_pending_changes(&pool).await?;
+        let mut state = self.state.lock().await;
+        state.updated_achievements |= pending_changes.achievements;
+        state.updated_stats |= pending_changes.statistics;
+        state.updated_leaderboards |= pending_changes.leaderboards;
+
         Ok(())
     }
 
