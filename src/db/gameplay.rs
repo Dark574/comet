@@ -8,6 +8,13 @@ use log::info;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Acquire, Error, Row, SqlitePool};
 
+#[derive(Debug, Default, Eq, PartialEq)]
+pub struct PendingChanges {
+    pub achievements: bool,
+    pub statistics: bool,
+    pub leaderboards: bool,
+}
+
 pub const SETUP_QUERY: &str = r#"
 CREATE TABLE IF NOT EXISTS `leaderboard` (`id` INTEGER PRIMARY KEY NOT NULL,`key` TEXT UNIQUE NOT NULL,`name` TEXT NOT NULL,`sort_method` TEXT CHECK ( sort_method IN ( 'SORT_METHOD_ASCENDING', 'SORT_METHOD_DESCENDING' ) ) NOT NULL,`display_type` TEXT CHECK ( display_type IN ( 'DISPLAY_TYPE_NUMERIC', 'DISPLAY_TYPE_TIME_SECONDS', 'DISPLAY_TYPE_TIME_MILLISECONDS' ) ) NOT NULL,`score` INTEGER NOT NULL DEFAULT 0,`rank` INTEGER NOT NULL DEFAULT 0,`force_update` INTEGER CHECK ( force_update IN ( 0, 1 ) ) NOT NULL DEFAULT 0,`changed` INTEGER CHECK ( changed IN ( 0, 1 ) ) NOT NULL, entry_total_count INTEGER NOT NULL DEFAULT 0, details TEXT NOT NULL DEFAULT "");
 CREATE TABLE IF NOT EXISTS `achievement` (`id` INTEGER PRIMARY KEY NOT NULL,`key` TEXT UNIQUE NOT NULL,`name` TEXT NOT NULL,`description` TEXT NOT NULL,`visible_while_locked` INTEGER CHECK ( visible_while_locked IN ( 0, 1 ) ) NOT NULL,`unlock_time` TEXT,`image_url_locked` TEXT NOT NULL,`image_url_unlocked` TEXT NOT NULL,`changed` INTEGER CHECK ( changed IN ( 0, 1 ) ) NOT NULL, rarity REAL NOT NULL DEFAULT 0.0, rarity_level_description TEXT NOT NULL DEFAULT "", rarity_level_slug TEXT NOT NULL DEFAULT "");
@@ -36,6 +43,24 @@ pub async fn setup_connection(client_id: &str, user_id: &str) -> Result<SqlitePo
     let url = String::from("sqlite:") + database_file.to_str().unwrap();
 
     SqlitePool::connect(&url).await
+}
+
+pub async fn get_pending_changes(database: &SqlitePool) -> Result<PendingChanges, Error> {
+    let mut connection = database.acquire().await?;
+    let row = sqlx::query(
+        r#"SELECT
+        EXISTS(SELECT 1 FROM achievement WHERE changed=1) AS achievements,
+        EXISTS(SELECT 1 FROM statistic WHERE changed=1) AS statistics,
+        EXISTS(SELECT 1 FROM leaderboard WHERE changed=1) AS leaderboards"#,
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+
+    Ok(PendingChanges {
+        achievements: row.try_get::<i64, _>("achievements")? != 0,
+        statistics: row.try_get::<i64, _>("statistics")? != 0,
+        leaderboards: row.try_get::<i64, _>("leaderboards")? != 0,
+    })
 }
 
 pub async fn has_statistics(database: &SqlitePool) -> bool {
@@ -680,4 +705,60 @@ pub async fn set_session_time(context: &HandlerContext, time_sum: u32) -> Result
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn pending_changes_database() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE achievement (changed INTEGER NOT NULL);\
+             CREATE TABLE statistic (changed INTEGER NOT NULL);\
+             CREATE TABLE leaderboard (changed INTEGER NOT NULL);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn get_pending_changes_restores_persisted_flags() {
+        let pool = pending_changes_database().await;
+        sqlx::query(
+            "INSERT INTO achievement VALUES (1);\
+             INSERT INTO statistic VALUES (0);\
+             INSERT INTO leaderboard VALUES (1);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let pending = get_pending_changes(&pool).await.unwrap();
+
+        assert_eq!(
+            PendingChanges {
+                achievements: true,
+                statistics: false,
+                leaderboards: true,
+            },
+            pending
+        );
+    }
+
+    #[tokio::test]
+    async fn get_pending_changes_is_clear_without_changed_rows() {
+        let pool = pending_changes_database().await;
+
+        let pending = get_pending_changes(&pool).await.unwrap();
+
+        assert_eq!(PendingChanges::default(), pending);
+    }
 }
