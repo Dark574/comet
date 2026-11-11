@@ -761,4 +761,90 @@ mod tests {
 
         assert_eq!(PendingChanges::default(), pending);
     }
+
+    #[tokio::test]
+    async fn pending_categories_are_restored_independently() {
+        for mask in 0..8 {
+            let pool = pending_changes_database().await;
+            for (statement, bit) in [
+                ("INSERT INTO achievement VALUES ($1)", 1),
+                ("INSERT INTO statistic VALUES ($1)", 2),
+                ("INSERT INTO leaderboard VALUES ($1)", 4),
+            ] {
+                sqlx::query(statement)
+                    .bind(i32::from(mask & bit != 0))
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+
+            assert_eq!(
+                PendingChanges {
+                    achievements: mask & 1 != 0,
+                    statistics: mask & 2 != 0,
+                    leaderboards: mask & 4 != 0,
+                },
+                get_pending_changes(&pool).await.unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_changes_survive_database_close_and_reopen() {
+        struct TemporaryDatabase(std::path::PathBuf);
+        impl Drop for TemporaryDatabase {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "retromind-comet-restart-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let temporary = TemporaryDatabase(path);
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(temporary.0.join("gameplay.db"))
+            .create_if_missing(true);
+        let pool = SqlitePool::connect_with(options.clone()).await.unwrap();
+        sqlx::query(SETUP_QUERY).execute(&pool).await.unwrap();
+        for statement in [
+            "INSERT INTO achievement (id,key,name,description,visible_while_locked,image_url_locked,image_url_unlocked,changed) VALUES (1,'a','a','',1,'','',1)",
+            "INSERT INTO statistic (id,key,type,increment_only,changed) VALUES (1,'s','INT',0,1)",
+            "INSERT INTO leaderboard (id,key,name,sort_method,display_type,changed) VALUES (1,'l','l','SORT_METHOD_ASCENDING','DISPLAY_TYPE_NUMERIC',1)",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+
+        let reopened = SqlitePool::connect_with(options.clone()).await.unwrap();
+        assert_eq!(
+            PendingChanges {
+                achievements: true,
+                statistics: true,
+                leaderboards: true
+            },
+            get_pending_changes(&reopened).await.unwrap()
+        );
+        for statement in [
+            "UPDATE achievement SET changed=0",
+            "UPDATE statistic SET changed=0",
+            "UPDATE leaderboard SET changed=0",
+        ] {
+            sqlx::query(statement).execute(&reopened).await.unwrap();
+        }
+        reopened.close().await;
+
+        let synchronized = SqlitePool::connect_with(options).await.unwrap();
+        assert_eq!(
+            PendingChanges::default(),
+            get_pending_changes(&synchronized).await.unwrap()
+        );
+        synchronized.close().await;
+    }
 }

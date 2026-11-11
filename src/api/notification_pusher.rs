@@ -248,7 +248,8 @@ impl NotificationPusherClient {
                                     message_buffer.extend(header_buf);
                                     message_buffer.extend(payload);
 
-                                    let new_message = tungstenite::Message::Binary(message_buffer.into());
+                                    let new_message =
+                                        tungstenite::Message::Binary(message_buffer.into());
                                     if let Err(error) =
                                         self.pusher_connection.feed(new_message).await
                                     {
@@ -283,10 +284,10 @@ impl NotificationPusherClient {
                             MessageFromTopic::parse_from_bytes(&parsed_message.payload);
                         if let Ok(msg) = message_from_topic {
                             log::debug!("Topic message: {:#?}", String::from_utf8_lossy(&msg_data));
-                            if let Err(error) = self
-                                .topic_sender
-                                .send(PusherEvent::Topic(msg_data.to_vec(), msg.topic().to_owned()))
-                            {
+                            if let Err(error) = self.topic_sender.send(PusherEvent::Topic(
+                                msg_data.to_vec(),
+                                msg.topic().to_owned(),
+                            )) {
                                 error!(
                                     "There was an error when forwarding topic message: {}",
                                     error
@@ -300,10 +301,7 @@ impl NotificationPusherClient {
                     debug!("Pong received");
                     pending_ping = false;
                     if let Err(err) = self.topic_sender.send(PusherEvent::Online) {
-                        warn!(
-                            "Failed to notify handlers about going online {}",
-                            err
-                        );
+                        warn!("Failed to notify handlers about going online {}", err);
                     }
                 }
             }

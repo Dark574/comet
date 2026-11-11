@@ -105,6 +105,10 @@ https://login.gog.com/auth?client_id=46899977096215655&layout=galaxy&redirect_ur
 
 ### Running
 
+The Retromind fork follows upstream Comet 0.4.1 and retains secure stdin credentials and restoration
+of pending achievement, statistic, and leaderboard synchronization after a restart. Its locked
+dependency graph requires Rust 1.94 or newer; Retromind builds it with a pinned Rust 1.94 Bookworm image.
+
 Launchers can pass credentials without exposing them in process arguments or writing them to a
 configuration file by starting Comet with `--credentials-stdin`. Comet reads one JSON object from
 standard input, limited to 16 KiB, before starting its services:

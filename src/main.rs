@@ -433,6 +433,15 @@ mod tests {
     }
 
     #[test]
+    fn credentials_stdin_supports_retromind_quit_invocation() {
+        let args = Args::try_parse_from(["comet", "--credentials-stdin", "--quit"]).unwrap();
+
+        assert!(args.credentials_stdin);
+        assert!(args.quit);
+        assert!(args.username.is_none());
+    }
+
+    #[test]
     fn credentials_stdin_conflicts_with_direct_credentials() {
         let args =
             Args::try_parse_from(["comet", "--credentials-stdin", "--access-token", "access"]);
@@ -452,5 +461,28 @@ mod tests {
         let args = Args::try_parse_from(["comet", "--from-heroic"]);
 
         assert!(args.is_err());
+    }
+
+    #[test]
+    fn credentials_stdin_conflicts_with_every_direct_credential_argument() {
+        for argument in [
+            "--access-token",
+            "--refresh-token",
+            "--user-id",
+            "--username",
+        ] {
+            assert!(
+                Args::try_parse_from(["comet", "--credentials-stdin", argument, "sentinel"])
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn credentials_stdin_conflicts_with_every_file_import() {
+        for argument in ["--from-heroic", "--from-lutris", "--from-wyvern"] {
+            assert!(Args::try_parse_from(["comet", "--credentials-stdin", argument]).is_err());
+        }
     }
 }

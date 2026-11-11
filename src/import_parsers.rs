@@ -235,4 +235,80 @@ mod tests {
 
         assert_eq!(error, "Credential input from stdin is too large");
     }
+
+    #[test]
+    fn accepts_exactly_sixteen_kib_of_stdin_credentials() {
+        let mut input = br#"{"access_token":"access","refresh_token":"refresh","user_id":"12345","username":"player"}"#.to_vec();
+        input.resize(MAX_STDIN_CREDENTIAL_BYTES as usize, b' ');
+
+        let credentials = read_credentials_from(Cursor::new(input)).unwrap();
+
+        assert_eq!(credentials.username.as_deref(), Some("player"));
+    }
+
+    #[test]
+    fn oversized_input_is_not_read_past_the_limit_plus_one() {
+        let mut reader = Cursor::new(vec![b'x'; MAX_STDIN_CREDENTIAL_BYTES as usize * 2]);
+
+        let error = read_credentials_from(&mut reader).err().unwrap();
+
+        assert_eq!(error, "Credential input from stdin is too large");
+        assert_eq!(reader.position(), MAX_STDIN_CREDENTIAL_BYTES + 1);
+    }
+
+    #[test]
+    fn rejects_every_missing_or_wrongly_typed_required_field() {
+        for field in ["access_token", "refresh_token", "user_id", "username"] {
+            let valid = serde_json::json!({
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "user_id": "12345",
+                "username": "player"
+            });
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            let mut wrong_type = valid;
+            wrong_type[field] = serde_json::Value::Null;
+
+            for input in [missing, wrong_type] {
+                let error = read_credentials_from(Cursor::new(serde_json::to_vec(&input).unwrap()))
+                    .err()
+                    .unwrap();
+                assert_eq!(error, "Credential input from stdin is not valid JSON");
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_fields_and_invalid_utf8_without_echoing_input() {
+        for input in [
+            br#"{"access_token":"DO_NOT_ECHO_ACCESS","refresh_token":"DO_NOT_ECHO_REFRESH","user_id":"12345","username":"player","unexpected":true}"#.to_vec(),
+            vec![0xff, 0xfe],
+        ] {
+            let error = read_credentials_from(Cursor::new(input)).err().unwrap();
+            assert_eq!(error, "Credential input from stdin is not valid JSON");
+        }
+    }
+
+    #[test]
+    fn rejects_empty_tokens_and_blank_identity_fields() {
+        for (field, value) in [
+            ("access_token", ""),
+            ("refresh_token", ""),
+            ("user_id", " \t"),
+            ("username", " \n"),
+        ] {
+            let mut input = serde_json::json!({
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "user_id": "12345",
+                "username": "player"
+            });
+            input[field] = value.into();
+
+            assert!(
+                read_credentials_from(Cursor::new(serde_json::to_vec(&input).unwrap())).is_err()
+            );
+        }
+    }
 }
